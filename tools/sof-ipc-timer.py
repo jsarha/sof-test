@@ -195,7 +195,7 @@ class IpcMsgParser(LogLineParser):
     def parse_mod_msg(self, msg_name, msg_str, msg_type, usecs, primary):
         if msg_type == "     ":
             self.parse_mod_1st(usecs, primary)
-        if self.comp_id == None:
+        if self.comp_id == None or self.comp_data.get(self.comp_id) is None:
             return
         comp = self.comp_data[self.comp_id]
         if msg_type == "reply" and self.args.reply_timings:
