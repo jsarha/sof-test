@@ -129,16 +129,11 @@ class IpcMsgParser(LogLineParser):
     pipe_id: int
     start: int
     state: int
+    fw_msg: str
 
     def __init__(self, args, comp_data, pipe_data):
         super().__init__(args, comp_data, pipe_data)
         self.reset()
-
-    def reset(self):
-        self.comp_id = -1
-        self.pipe_id = -1
-        self.start = -1
-        self.state = -1
 
     def parse_line(self, line):
         if match_obj := re.search(r" ipc tx (     |reply|done )", line):
@@ -150,16 +145,36 @@ class IpcMsgParser(LogLineParser):
             usecs = secs * 1000000 + dt_object.microsecond
             msg_type = line[match_start_pos + 8 : match_end_pos]
             msg_part = line[match_end_pos:].split()
-            msg_str = msg_part[1]
+            msg_str = msg_part[1].rstrip(":")
             msg_name = msg_part[2]
             primary = int(msg_str.split('|')[0], 16)
-            extension =  int(msg_str.split('|')[1].rstrip(":"), 16)
+            extension =  int(msg_str.split('|')[1], 16)
             if msg_name == "MOD_INIT_INSTANCE" or msg_part[2] == "MOD_LARGE_CONFIG_SET":
-                self.parse_mod_msg(msg_name, msg_str, msg_type, usecs, primary)
+                return self.parse_mod_msg(msg_name, msg_str, msg_type, usecs, primary)
             elif msg_name == "GLB_SET_PIPELINE_STATE":
-                self.parse_glb_set_msg(msg_type, msg_str, usecs, primary)
-            return True
+                return self.parse_glb_set_msg(msg_type, msg_str, usecs, primary)
         return False
+
+    def fw_lookup(self, fwlog_file):
+        if self.fw_msg == "":
+            return
+        if not fwlog_file is None:
+            for line in fwlog_file:
+                index = line.find(self.fw_msg)
+                if index > 0:
+                    usecs = int(line[index:].split()[2])
+                    #if self.comp_id > 0:
+                    #   comp = self.comp_data[self.comp_id]
+                    print("\tfw processing time %d us" % usecs)
+                    break
+        self.reset()
+
+    def reset(self):
+        self.comp_id = -1
+        self.pipe_id = -1
+        self.start = -1
+        self.state = -1
+        self.fw_msg = ""
 
     def parse_mod_1st(self, usecs, primary):
         self.comp_id = primary & 0xFFFFFF
@@ -190,18 +205,20 @@ class IpcMsgParser(LogLineParser):
                 print("%s:\tconf done\t%d us%s%s" %
                       (comp.wname, usecs - self.start, message, pipeline_id))
             comp.conf_times.append(usecs - self.start)
-        self.reset()
 
     def parse_mod_msg(self, msg_name, msg_str, msg_type, usecs, primary):
         if msg_type == "     ":
             self.parse_mod_1st(usecs, primary)
         if self.comp_id == None or self.comp_data.get(self.comp_id) is None:
-            return
+            return False
         comp = self.comp_data[self.comp_id]
         if msg_type == "reply" and self.args.reply_timings:
             self.parse_mod_reply(comp, msg_name, usecs)
+            return False
         elif msg_type == "done ":
             self.parse_mod_done(comp, msg_name, msg_str, usecs)
+            self.fw_msg = msg_str
+            return True
 
     def parse_glb_set_1st(self, usecs, primary):
         self.pipe_id = (primary & 0x00FF0000) >> 16
@@ -221,15 +238,18 @@ class IpcMsgParser(LogLineParser):
             print("pipeline id: %d\tstate %d done\t%d us%s" %
                   (self.pipe_id, self.state, usecs - self.start, message))
         self.pipe_data[self.pipe_id].add_state_timing(self.state, usecs - self.start)
-        self.reset()
 
     def parse_glb_set_msg(self, msg_type, msg_str, usecs, primary):
         if msg_type == "     ":
             self.parse_glb_set_1st(usecs, primary)
+            return False
         elif msg_type == "reply" and self.args.reply_timings:
             self.parse_glb_set_reply(usecs)
+            return False
         elif msg_type == "done ":
             self.parse_glb_set_done(msg_str, usecs)
+            self.fw_msg = msg_str
+            return True
 
 class SOFLinuxLogParser:
     def __init__(self, args):
@@ -240,14 +260,15 @@ class SOFLinuxLogParser:
         self.widget_parser = WidgetParser(args, self.comp_data, self.pipe_data)
         self.ipc_msg_parser = IpcMsgParser(args, self.comp_data, self.pipe_data)
 
-    def read_log_data(self, file):
-        for line in file:
+    def read_log_data(self, klog_file, fwlog_file):
+        for line in klog_file:
             if self.pipe_parser.parse_line(line):
                 continue
             if self.widget_parser.parse_line(line):
                 continue
             if self.ipc_msg_parser.parse_line(line):
-                continue
+                self.ipc_msg_parser.fw_lookup(fwlog_file)
+                continue 
 
     def print_min_max_avg(self, prefix, times):
         if len(times) == 0:
@@ -286,6 +307,9 @@ def parse_args():
     parser = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter,
                                      description=__doc__)
     parser.add_argument('filename', nargs="?", help="Optional log file, stdin if not defined")
+    parser.add_argument("-f", "--fw-log-file",
+                        help="FW log file to scan for corresponding IPC timing data",
+                        default=None,)
     parser.add_argument('-t', '--trigger-nessages', action="store_true", default=False,
                         help='Show trigger message handling times')
     parser.add_argument('-i', '--init-messages', action="store_true", default=False,
@@ -305,12 +329,19 @@ def parse_args():
 def main():
     args = parse_args()
     log_parser = SOFLinuxLogParser(args)
+    fw_log = None
+
+    if args.fw_log_file != None:
+        fw_log = open(args.fw_log_file, 'r', encoding='utf8')
 
     if args.filename is None:
-        log_parser.read_log_data(sys.stdin)
+        log_parser.read_log_data(sys.stdin, fw_log)
     else:
         with open(args.filename, 'r', encoding='utf8') as file:
-            log_parser.read_log_data(file)
+            log_parser.read_log_data(file, fw_log)
+
+    if fw_log != None:
+        fw_log.close()
 
     log_parser.summary()
 
