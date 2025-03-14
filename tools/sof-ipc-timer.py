@@ -24,6 +24,8 @@ class Component:
     wname: str
     init_times: list
     conf_times: list
+    fw_init_times: list
+    fw_conf_times: list
 
     def __init__(self, pipe_id, comp_id, wname):
         self.pipe_id = pipe_id
@@ -31,6 +33,8 @@ class Component:
         self.wname = wname
         self.init_times = []
         self.conf_times = []
+        self.fw_init_times = []
+        self.fw_conf_times = []
 
     def __str__(self) -> str:
         return f'{self.pipe_id}-{self.comp_id:#08x}'
@@ -40,11 +44,13 @@ class Pipeline:
     pipe_id: int
     comps: list
     state_times: dict
+    fw_state_times: dict
 
     def __init__(self, pipe_id):
         self.pipe_id = pipe_id
         self.comps = []
         self.state_times = {}
+        self.fw_state_times = {}
 
     def __str__(self) -> str:
         return f'pipeline.{self.pipe_id + 1}'
@@ -53,6 +59,11 @@ class Pipeline:
         if self.state_times.get(state) is None:
             self.state_times[state] = []
         self.state_times[state].append(usecs)
+
+    def add_fw_state_timing(self, state, usecs):
+        if self.fw_state_times.get(state) is None:
+            self.fw_state_times[state] = []
+        self.fw_state_times[state].append(usecs)
 
 class LogLineParser:
     def __init__(self, args, comp_data, pipe_data):
@@ -199,11 +210,15 @@ class IpcMsgParser(LogLineParser):
                 print("%s:\tinit done\t%d us%s%s%s" %
                       (comp.wname, usecs - self.start, fw_time, message, pipeline_id))
             comp.init_times.append(usecs - self.start)
+            if not fw_usec is None:
+                comp.fw_init_times.append(fw_usec)
         elif msg_name == "MOD_LARGE_CONFIG_SET":
             if self.args.config_messages:
                 print("%s:\tconf done\t%d us%s%s%s" %
                       (comp.wname, usecs - self.start, fw_time, message, pipeline_id))
             comp.conf_times.append(usecs - self.start)
+            if not fw_usec is None:
+                comp.fw_conf_times.append(usecs - self.start)
         self.reset()
 
     def parse_mod_msg(self, msg_name, msg_str, msg_type, usecs, primary):
@@ -239,6 +254,8 @@ class IpcMsgParser(LogLineParser):
             print("pipeline id: %d\tstate %d done\t%d us%s%s" %
                   (self.pipe_id, self.state, usecs - self.start, fw_time, message))
         self.pipe_data[self.pipe_id].add_state_timing(self.state, usecs - self.start)
+        if not fw_usec is None:
+            self.pipe_data[self.pipe_id].add_fw_state_timing(self.state, fw_usec)
         self.reset()
 
     def parse_glb_set_msg(self, msg_type, msg_str, usecs, primary):
@@ -265,7 +282,7 @@ class SOFLinuxLogParser:
             if self.widget_parser.parse_line(line):
                 continue
             if self.ipc_msg_parser.parse_line(line):
-                continue 
+                continue
 
     def print_min_max_avg(self, prefix, times):
         if len(times) == 0:
@@ -287,8 +304,10 @@ class SOFLinuxLogParser:
             return
         for comp_id in self.comp_data:
             mod = self.comp_data[comp_id]
-            self.print_min_max_avg(mod.wname + " init", mod.init_times)
-            self.print_min_max_avg(mod.wname + " conf", mod.conf_times)
+            self.print_min_max_avg(mod.wname + "    init", mod.init_times)
+            self.print_min_max_avg(mod.wname + " fw init", mod.fw_init_times)
+            self.print_min_max_avg(mod.wname + "    conf", mod.conf_times)
+            self.print_min_max_avg(mod.wname + " fw conf", mod.fw_conf_times)
         for pipe_id in self.pipe_data:
             pipe = self.pipe_data[pipe_id]
             print("%s:" % pipe, end=" ")
@@ -297,7 +316,10 @@ class SOFLinuxLogParser:
             print()
             for state in pipe.state_times:
                 state_times_list = pipe.state_times[state]
-                self.print_min_max_avg(str(pipe) + " " + str(state), state_times_list)
+                self.print_min_max_avg(str(pipe) + " " + str(state) + "   ", state_times_list)
+            for state in pipe.fw_state_times:
+                state_times_list = pipe.fw_state_times[state]
+                self.print_min_max_avg(str(pipe) + " " + str(state) + " fw", state_times_list)
 
 def parse_args():
     '''Parse command line arguments'''
