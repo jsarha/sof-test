@@ -68,11 +68,10 @@ class Pipeline:
         self.fw_state_times[state].append(usecs)
 
 class LogLineParser:
-    def __init__(self, args, comp_data, pipe_data, multi_pipe):
+    def __init__(self, args, comp_data, pipe_data):
         self.args = args
         self.comp_data = comp_data
         self.pipe_data = pipe_data
-        self.multi_pipe = multi_pipe
 
 class PipelineParser(LogLineParser):
     '''Parse line of form
@@ -81,8 +80,8 @@ class PipelineParser(LogLineParser):
 
     'pipe_id' from ' instance 0,'
     '''
-    def __init__(self, args, comp_data, pipe_data, multi_pipe):
-        super().__init__(args, comp_data, pipe_data, multi_pipe)
+    def __init__(self, args, comp_data, pipe_data):
+        super().__init__(args, comp_data, pipe_data)
 
     def parse_line(self, line):
         if match_obj := re.search(r" Create pipeline ", line):
@@ -105,8 +104,8 @@ class WidgetParser(LogLineParser):
     'pipi_id' integer form "(pipe 1)"
     'widget_id' MSB integer from "instance 0," and LSB from "ID 4,"
     '''
-    def __init__(self, args, comp_data, pipe_data, multi_pipe):
-        super().__init__(args, comp_data, pipe_data, multi_pipe)
+    def __init__(self, args, comp_data, pipe_data):
+        super().__init__(args, comp_data, pipe_data)
 
     def parse_line(self, line):
         if match_obj := re.search(r" Create widget ", line):
@@ -146,8 +145,8 @@ class IpcMsgParser(LogLineParser):
     start: int
     state: int
 
-    def __init__(self, args, comp_data, pipe_data, multi_pipe, fwlog_file):
-        super().__init__(args, comp_data, pipe_data, multi_pipe)
+    def __init__(self, args, comp_data, pipe_data, fwlog_file):
+        super().__init__(args, comp_data, pipe_data)
         self.reset()
         self.fwlog_file = fwlog_file
 
@@ -168,7 +167,7 @@ class IpcMsgParser(LogLineParser):
             if msg_name == "MOD_INIT_INSTANCE" or msg_part[2] == "MOD_LARGE_CONFIG_SET":
                 self.parse_mod_msg(msg_name, msg_str, msg_type, usecs, primary)
             elif msg_name == "GLB_SET_PIPELINE_STATE":
-                self.parse_glb_set_msg(msg_type, msg_str, usecs, primary, extension)
+                self.parse_glb_set_msg(msg_type, msg_str, usecs, primary)
             return True
         return False
 
@@ -180,17 +179,6 @@ class IpcMsgParser(LogLineParser):
                     usecs = int(line[index:].split()[2])
                     return usecs
         return None
-
-    def fw_multi_pipe(self):
-        pipes = []
-        for line in self.fwlog_file:
-            marker = "pipe: pipeline_trigger: pipe:"
-            index = line.find(marker)
-            if index > 0:
-                pipes.append(int(line[index + len(marker):].split()[0]))
-            else:
-                break
-        return pipes
 
     def reset(self):
         self.comp_id = -1
@@ -248,20 +236,13 @@ class IpcMsgParser(LogLineParser):
         elif msg_type == "done ":
             self.parse_mod_done(comp, msg_name, msg_str, usecs)
 
-    def parse_glb_set_1st(self, usecs, primary, extension):
+    def parse_glb_set_1st(self, usecs, primary):
         self.state = primary & 0xFFFF
         self.start = usecs
         pipe_inst = (primary & 0x00FF0000) >> 16
-        self.pipe_id = -1
-        if extension == 1:
-            return
         for pipe_id in self.pipe_data:
             if self.pipe_data[pipe_id].pipe_inst == pipe_inst:
                 self.pipe_id = pipe_id
-                break
-        if self.pipe_id < 0:
-            print("Unknown pipeline instance %d, from %#x|%#x" % (pipe_inst, primary, extension))
-            sys.exit(2)
 
     def parse_glb_set_reply(self, usecs):
         print("pipeline id: %d\tstate %d reply\t %d us" %
@@ -274,13 +255,6 @@ class IpcMsgParser(LogLineParser):
         fw_usec = self.fw_lookup(msg_str)
         if not fw_usec is None:
             fw_time = "\tfw " + str(fw_usec) + " us"
-            pipes = self.fw_multi_pipe()
-            pipes_str = ""
-            for i in pipes:
-                pipes_str = pipes_str + " " + str(i)
-            if pipes_str == "":
-                pipes_str = "anonymous"
-            print("Multipipe trigger detected: %s" % pipes_str)
         if self.args.message:
             message = "\t" + msg_str
         if self.args.trigger_nessages:
@@ -291,9 +265,9 @@ class IpcMsgParser(LogLineParser):
             self.pipe_data[self.pipe_id].add_fw_state_timing(self.state, fw_usec)
         self.reset()
 
-    def parse_glb_set_msg(self, msg_type, msg_str, usecs, primary, extension):
+    def parse_glb_set_msg(self, msg_type, msg_str, usecs, primary):
         if msg_type == "     ":
-            self.parse_glb_set_1st(usecs, primary, extension)
+            self.parse_glb_set_1st(usecs, primary)
         elif msg_type == "reply" and self.args.reply_timings:
             self.parse_glb_set_reply(usecs)
         elif msg_type == "done ":
@@ -304,11 +278,9 @@ class SOFLinuxLogParser:
         self.args = args
         self.comp_data = {}
         self.pipe_data = {}
-        self.multi_pipe = {}
-        self.pipe_parser = PipelineParser(args, self.comp_data, self.pipe_data, self.multi_pipe)
-        self.widget_parser = WidgetParser(args, self.comp_data, self.pipe_data, self.multi_pipe)
-        self.ipc_msg_parser = IpcMsgParser(args, self.comp_data, self.pipe_data, self.multi_pipe,
-                                           fwlog_file)
+        self.pipe_parser = PipelineParser(args, self.comp_data, self.pipe_data)
+        self.widget_parser = WidgetParser(args, self.comp_data, self.pipe_data)
+        self.ipc_msg_parser = IpcMsgParser(args, self.comp_data, self.pipe_data, fwlog_file)
 
     def read_log_data(self, klog_file):
         for line in klog_file:
