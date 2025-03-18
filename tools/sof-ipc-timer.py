@@ -55,7 +55,36 @@ class Pipeline:
         self.fw_state_times = {}
 
     def __str__(self) -> str:
-        return f'pipeline.{self.pipe_id + 1}'
+        return f'pipeline.{self.pipe_id}'
+
+    def add_state_timing(self, state, usecs):
+        if self.state_times.get(state) is None:
+            self.state_times[state] = []
+        self.state_times[state].append(usecs)
+
+    def add_fw_state_timing(self, state, usecs):
+        if self.fw_state_times.get(state) is None:
+            self.fw_state_times[state] = []
+        self.fw_state_times[state].append(usecs)
+
+class MultiPipe:
+    '''SOF audio storage class for multi pipeline trigger messages'''
+    pipe_ids: list
+    state_times: dict
+    fw_state_times: dict
+
+    def __init__(self, pipe_ids):
+        self.pipe_ids = pipe_ids
+        self.state_times = {}
+        self.fw_state_times = {}
+
+    def __str__(self) -> str:
+        if len(self.pipe_ids) == 0:
+            return "anonymous"
+        pipes = ""
+        for pipe_id in self.pipe_ids:
+            pipes = pipes + f'pipeline.{pipe_id} '
+        return pipes
 
     def add_state_timing(self, state, usecs):
         if self.state_times.get(state) is None:
@@ -190,7 +219,22 @@ class IpcMsgParser(LogLineParser):
                 pipes.append(int(line[index + len(marker):].split()[0]))
             else:
                 break
-        return pipes
+        pipe_ids = []
+        for i in pipes:
+            for pipe_id in self.pipe_data:
+                if self.pipe_data[pipe_id].pipe_inst == i:
+                    pipe_ids.append(pipe_id)
+                    break
+        pipe_ids.sort()
+        pipes_key = ""
+        for pipe_id in pipe_ids:
+            pipes_key = pipes_key + " " + str(pipe_id)
+        if pipes_key == "":
+            pipes_key = "anonymous"
+        print("Multipipe trigger detected: %s" % pipes_key)
+        if self.multi_pipe.get(pipes_key) is None:
+            self.multi_pipe[pipes_key] = MultiPipe(pipe_ids)
+        return pipes_key
 
     def reset(self):
         self.comp_id = -1
@@ -272,23 +316,27 @@ class IpcMsgParser(LogLineParser):
         fw_time = ""
         message = ""
         fw_usec = self.fw_lookup(msg_str)
+        pipes_key = None
         if not fw_usec is None:
             fw_time = "\tfw " + str(fw_usec) + " us"
-            pipes = self.fw_multi_pipe()
-            pipes_str = ""
-            for i in pipes:
-                pipes_str = pipes_str + " " + str(i)
-            if pipes_str == "":
-                pipes_str = "anonymous"
-            print("Multipipe trigger detected: %s" % pipes_str)
+            pipes_key = self.fw_multi_pipe()
         if self.args.message:
             message = "\t" + msg_str
-        if self.args.trigger_nessages:
-            print("pipeline id: %d\tstate %d done\t%d us%s%s" %
-                  (self.pipe_id, self.state, usecs - self.start, fw_time, message))
-        self.pipe_data[self.pipe_id].add_state_timing(self.state, usecs - self.start)
-        if not fw_usec is None:
-            self.pipe_data[self.pipe_id].add_fw_state_timing(self.state, fw_usec)
+        if self.args.trigger_messages:
+            if self.pipe_id < 0:
+                pipe_id_str = pipes_key
+            else:
+                pipe_id_str = str(self.pipe_id)
+            print("pipeline id: %s\tstate %d done\t%d us%s%s" %
+                  (pipe_id_str, self.state, usecs - self.start, fw_time, message))
+        if self.pipe_id >= 0:
+            self.pipe_data[self.pipe_id].add_state_timing(self.state, usecs - self.start)
+            if not fw_usec is None:
+                self.pipe_data[self.pipe_id].add_fw_state_timing(self.state, fw_usec)
+        elif not pipes_key is None:
+            self.multi_pipe[pipes_key].add_state_timing(self.state, usecs - self.start)
+            if not fw_usec is None:
+                self.multi_pipe[pipes_key].add_fw_state_timing(self.state, fw_usec)
         self.reset()
 
     def parse_glb_set_msg(self, msg_type, msg_str, usecs, primary, extension):
@@ -367,7 +415,7 @@ def parse_args():
     parser.add_argument("-f", "--fw-log-file",
                         help="FW log file to scan for corresponding IPC timing data",
                         default=None,)
-    parser.add_argument('-t', '--trigger-nessages', action="store_true", default=False,
+    parser.add_argument('-t', '--trigger-messages', action="store_true", default=False,
                         help='Show trigger message handling times')
     parser.add_argument('-i', '--init-messages', action="store_true", default=False,
                         help='Show init message handling times')
