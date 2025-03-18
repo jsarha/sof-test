@@ -42,12 +42,14 @@ class Component:
 class Pipeline:
     '''SOF audio pipeline storage class'''
     pipe_id: int
+    pipe_inst: int
     comps: list
     state_times: dict
     fw_state_times: dict
 
     def __init__(self, pipe_id):
         self.pipe_id = pipe_id
+        self.pipe_inst = -1
         self.comps = []
         self.state_times = {}
         self.fw_state_times = {}
@@ -85,9 +87,11 @@ class PipelineParser(LogLineParser):
         if match_obj := re.search(r" Create pipeline ", line):
             match_end_pos = match_obj.span()[1]
             line_split = line[match_end_pos + 1:].split()
-            pipe_id = int(line_split[5].rstrip(","))
+            pipe_id = int(line_split[2].rstrip(")"))
+            pipe_inst = int(line_split[5].rstrip(","))
             if self.pipe_data.get(pipe_id) is None:
                 self.pipe_data[pipe_id] = Pipeline(pipe_id)
+            self.pipe_data[pipe_id].pipe_inst = pipe_inst
             return True
         return False
 
@@ -108,8 +112,8 @@ class WidgetParser(LogLineParser):
             match_end_pos = match_obj.span()[1]
             line_split = line[match_end_pos:].split()
             widget_name = line_split[0]
-            # pipeline instance id is one smaller than the pipeline number
-            pipe_id = int(line_split[2].rstrip(")")) - 1
+            # pipeline id
+            pipe_id = int(line_split[2].rstrip(")"))
             module_instance_id = int(line_split[7].rstrip(","))
             widget_id = int(line_split[5].rstrip(","))
             # final module id are composed with high16(module instance id) + low16(module id)
@@ -204,7 +208,7 @@ class IpcMsgParser(LogLineParser):
         if self.args.message:
             message = "\t" + msg_str
         if self.args.pipeline_id:
-            pipeline_id = "\tpipeline id: " + str(comp.pipe_id)
+            pipeline_id = "\tpipeline." + str(comp.pipe_id)
         if msg_name == "MOD_INIT_INSTANCE":
             if self.args.init_messages:
                 print("%s:\tinit done\t%d us%s%s%s" %
@@ -233,9 +237,12 @@ class IpcMsgParser(LogLineParser):
             self.parse_mod_done(comp, msg_name, msg_str, usecs)
 
     def parse_glb_set_1st(self, usecs, primary):
-        self.pipe_id = (primary & 0x00FF0000) >> 16
         self.state = primary & 0xFFFF
         self.start = usecs
+        pipe_inst = (primary & 0x00FF0000) >> 16
+        for pipe_id in self.pipe_data:
+            if self.pipe_data[pipe_id].pipe_inst == pipe_inst:
+                self.pipe_id = pipe_id
 
     def parse_glb_set_reply(self, usecs):
         print("pipeline id: %d\tstate %d reply\t %d us" %
