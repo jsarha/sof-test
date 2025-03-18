@@ -304,9 +304,11 @@ class SOFLinuxLogParser:
             return
         for comp_id in self.comp_data:
             mod = self.comp_data[comp_id]
-            self.print_min_max_avg(mod.wname + "    init", mod.init_times)
+            if not self.args.fw_only:
+                self.print_min_max_avg(mod.wname + "    init", mod.init_times)
             self.print_min_max_avg(mod.wname + " fw init", mod.fw_init_times)
-            self.print_min_max_avg(mod.wname + "    conf", mod.conf_times)
+            if not self.args.fw_only:
+                self.print_min_max_avg(mod.wname + "    conf", mod.conf_times)
             self.print_min_max_avg(mod.wname + " fw conf", mod.fw_conf_times)
         for pipe_id in self.pipe_data:
             pipe = self.pipe_data[pipe_id]
@@ -314,9 +316,10 @@ class SOFLinuxLogParser:
             for comp in pipe.comps:
                 print("%s" % comp.wname, end=", ")
             print()
-            for state in pipe.state_times:
-                state_times_list = pipe.state_times[state]
-                self.print_min_max_avg(str(pipe) + " " + str(state) + "   ", state_times_list)
+            if not self.args.fw_only:
+                for state in pipe.state_times:
+                    state_times_list = pipe.state_times[state]
+                    self.print_min_max_avg(str(pipe) + " " + str(state) + "   ", state_times_list)
             for state in pipe.fw_state_times:
                 state_times_list = pipe.fw_state_times[state]
                 self.print_min_max_avg(str(pipe) + " " + str(state) + " fw", state_times_list)
@@ -343,6 +346,8 @@ def parse_args():
                         help='Show pipeline id')
     parser.add_argument('-s', '--summary', action="store_true", default=False,
                         help='Show average, max, and min latencies of message handling')
+    parser.add_argument('-F', '--fw-only', action="store_true", default=False,
+                        help='Show only FW numbers')
     return parser.parse_args()
 
 def main():
