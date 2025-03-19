@@ -222,7 +222,7 @@ class IpcMsgParser(LogLineParser):
                       (comp.wname, usecs - self.start, fw_time, message, pipeline_id))
             comp.conf_times.append(usecs - self.start)
             if not fw_usec is None:
-                comp.fw_conf_times.append(usecs - self.start)
+                comp.fw_conf_times.append(fw_usec)
         self.reset()
 
     def parse_mod_msg(self, msg_name, msg_str, msg_type, usecs, primary):
@@ -260,6 +260,8 @@ class IpcMsgParser(LogLineParser):
         if self.args.trigger_nessages:
             print("pipeline id: %d\tstate %d done\t%d us%s%s" %
                   (self.pipe_id, self.state, usecs - self.start, fw_time, message))
+        if self.pipe_id < 0:
+            return
         self.pipe_data[self.pipe_id].add_state_timing(self.state, usecs - self.start)
         if not fw_usec is None:
             self.pipe_data[self.pipe_id].add_fw_state_timing(self.state, fw_usec)
