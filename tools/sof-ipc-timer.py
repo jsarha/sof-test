@@ -144,6 +144,7 @@ class IpcMsgParser(LogLineParser):
     pipe_id: int
     start: int
     state: int
+    trigger_cmd: int
 
     def __init__(self, args, comp_data, pipe_data, fwlog_file):
         super().__init__(args, comp_data, pipe_data)
@@ -151,6 +152,16 @@ class IpcMsgParser(LogLineParser):
         self.fwlog_file = fwlog_file
 
     def parse_line(self, line):
+        if line.find(":hda_dai_trigger:") >= 0:
+            find_str = ": cmd="
+            index = line.find(find_str)
+            if index >= 0:
+                self.trigger_cmd = int(line[index + len(find_str):].split()[0])
+        if line.find(":sof_ipc4_trigger_pipelines:") >= 0:
+            find_str = ": cmd: "
+            index = line.find(find_str)
+            if index >= 0:
+                self.trigger_cmd = int(line[index + len(find_str):].split()[0].rstrip(","))
         if match_obj := re.search(r" ipc tx (     |reply|done )", line):
             match_start_pos = match_obj.span()[0]
             match_end_pos = match_obj.span()[1]
@@ -185,6 +196,7 @@ class IpcMsgParser(LogLineParser):
         self.pipe_id = -1
         self.start = -1
         self.state = -1
+        self.trigger_cmd = -1
 
     def parse_mod_1st(self, usecs, primary):
         self.comp_id = primary & 0xFFFFFF
@@ -261,6 +273,9 @@ class IpcMsgParser(LogLineParser):
             print("pipeline id: %d\tstate %d done\t%d us%s%s" %
                   (self.pipe_id, self.state, usecs - self.start, fw_time, message))
         if self.pipe_id < 0:
+            return
+        # If this is part of cmd 1 trigger, ignore idle state = 3 (=pause) command
+        if self.trigger_cmd == 1 and self.state == 3:
             return
         self.pipe_data[self.pipe_id].add_state_timing(self.state, usecs - self.start)
         if not fw_usec is None:
